@@ -9,15 +9,18 @@
 //  - POST /torre/api/lead/:id/estado  : cambiar la temperatura del lead
 //  - POST /torre/api/lead/:id/notas   : guardar tus notas del lead
 //  - POST /torre/api/lead/nuevo       : agregar un lead a mano
+//  - POST /torre/api/lead/:id/aviso   : mandarte a tu correo la ficha del lead (prueba tus avisos)
 //
 //  Auth: cabecera x-torre-key. La clave se crea en la PRIMERA visita a /torre
 //  (se guarda con hash en la tabla config; nunca en texto plano) o, si
 //  prefieres, por secreto: printf '%s' 'CLAVE' | npx wrangler secret put TORRE_KEY
 // ============================================================
 
-import { json, texto, escapeHtml, upsertLead, getLeadContext, type Env } from "./crm";
-
-const ESTADOS_VALIDOS = ["nuevo", "curioso", "tibio", "caliente", "calificado", "agendo", "comprador", "baja"];
+import {
+  json, texto, escapeHtml, upsertLead, getLeadContext, normalizarTelefono, paisTelefono, zonaHoraria,
+  ultimasRespuestas, ultimaCita, citaLegible, colorValido, canal, haciaBlanco, haciaNegro, ESTADOS_VALIDOS, type Env,
+} from "./crm";
+import { enviarAviso, avisosConfigurados } from "./avisos";
 
 // ---------- Clave de la Torre ----------
 async function sha256Hex(s: string): Promise<string> {
@@ -71,6 +74,8 @@ export async function handleTorre(request: Request, env: Env, pathname: string):
   if (m && request.method === "POST") return torreCambiarEstado(request, env, Number(m[1]));
   m = pathname.match(/^\/torre\/api\/lead\/(\d+)\/notas$/);
   if (m && request.method === "POST") return torreGuardarNotas(request, env, Number(m[1]));
+  m = pathname.match(/^\/torre\/api\/lead\/(\d+)\/aviso$/);
+  if (m && request.method === "POST") return torreAviso(env, Number(m[1]), url.origin + "/torre");
 
   return json({ ok: false, error: "not_found" }, 404);
 }
@@ -115,11 +120,6 @@ function offsetMinutos(tz: string): number {
   } catch {
     return -300; // si la zona está mal escrita, usamos hora de Colombia
   }
-}
-
-function zonaHoraria(env: Env): string {
-  const tz = env.TIMEZONE || "America/Bogota";
-  return /^[A-Za-z0-9_+\/-]+$/.test(tz) ? tz : "America/Bogota";
 }
 
 // ---------- /torre/api/stats ----------
@@ -194,12 +194,31 @@ async function torreLeads(env: Env, url: URL): Promise<Response> {
 async function torreLead(env: Env, id: number): Promise<Response> {
   const ctx = await getLeadContext(env, id);
   if (!ctx) return json({ ok: false, error: "not_found" }, 404);
-  const ev = await env.DB.prepare(
-    "SELECT type, payload, created_at FROM events WHERE lead_id = ? ORDER BY id DESC LIMIT 100"
-  )
-    .bind(id)
-    .all();
-  return json({ ok: true, ...ctx, events: ev.results ?? [] });
+  const [ev, respuestas, cita] = await Promise.all([
+    env.DB.prepare("SELECT type, payload, created_at FROM events WHERE lead_id = ? ORDER BY id DESC LIMIT 100")
+      .bind(id)
+      .all(),
+    ultimasRespuestas(env, id),
+    ultimaCita(env, id),
+  ]);
+  // Lo que la ficha necesita ya masticado: WhatsApp con indicativo, sus respuestas y la cita en TU hora.
+  const whatsapp = normalizarTelefono((ctx.lead as { phone?: string }).phone, paisTelefono(env));
+  const extra = { whatsapp, respuestas, cita: citaLegible(cita, zonaHoraria(env)), avisos: avisosConfigurados(env) };
+  return json({ ok: true, ...ctx, events: ev.results ?? [], extra });
+}
+
+// ---------- /torre/api/lead/:id/aviso : mándame este lead al correo ----------
+// Sirve para tener la ficha en el celular y para probar que tus avisos funcionan.
+async function torreAviso(env: Env, id: number, torreUrl: string): Promise<Response> {
+  if (!avisosConfigurados(env)) {
+    return json({ ok: false, mensaje: "Los avisos por correo todavía no están configurados (falta la clave de Brevo o tu correo). Mira «Avisos a tu correo» en el README." });
+  }
+  const lead = await env.DB.prepare("SELECT status FROM leads WHERE id = ?").bind(id).first<{ status: string }>();
+  if (!lead) return json({ ok: false, error: "not_found" }, 404);
+  const r = await enviarAviso(env, id, lead.status === "agendo" ? "agendo" : "nuevo", torreUrl);
+  return json(r.ok
+    ? { ok: true, mensaje: "Listo: revisa tu correo. La primera vez puede caer en spam; márcalo como «No es spam»." }
+    : { ok: false, mensaje: "Brevo no lo envió. " + (r.error || "") });
 }
 
 // ---------- /torre/api/lead/:id/estado : mover en el embudo ----------
@@ -227,8 +246,9 @@ async function torreGuardarNotas(request: Request, env: Env, id: number): Promis
 // ---------- /torre/api/lead/nuevo : agregar a mano ----------
 async function torreLeadNuevo(request: Request, env: Env): Promise<Response> {
   const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
-  const email = texto(body.email);
-  const phone = texto(body.phone, 40);
+  const email = texto(body.email)?.toLowerCase() ?? null;
+  const phoneRaw = texto(body.phone, 40);
+  const phone = normalizarTelefono(phoneRaw, paisTelefono(env)) ?? phoneRaw;
   const externalId = email ?? phone;
   if (!externalId) return json({ ok: false, error: "falta_contacto" }, 400);
   const lead = await upsertLead(env, {
@@ -248,25 +268,6 @@ async function torreLeadNuevo(request: Request, env: Env): Promise<Response> {
 //  para convivir dentro de este template literal de TypeScript.
 // ============================================================
 
-// -- Colores de marca: del hex del negocio salen las variantes --
-function colorValido(c: string | undefined): string {
-  return c && /^#[0-9a-fA-F]{6}$/.test(c) ? c.toLowerCase() : "#cdb68c";
-}
-function canal(hex: string, i: number): number {
-  return parseInt(hex.slice(1 + i * 2, 3 + i * 2), 16);
-}
-function aHex(r: number, g: number, b: number): string {
-  const h = (n: number) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, "0");
-  return "#" + h(r) + h(g) + h(b);
-}
-function haciaBlanco(hex: string, p: number): string {
-  const [r, g, b] = [canal(hex, 0), canal(hex, 1), canal(hex, 2)];
-  return aHex(r + (255 - r) * p, g + (255 - g) * p, b + (255 - b) * p);
-}
-function haciaNegro(hex: string, p: number): string {
-  return aHex(canal(hex, 0) * (1 - p), canal(hex, 1) * (1 - p), canal(hex, 2) * (1 - p));
-}
-
 function torreHtml(env: Env): string {
   const negocio = escapeHtml(env.BUSINESS_NAME || "Mi Negocio");
   const color = colorValido(env.BRAND_COLOR);
@@ -274,6 +275,7 @@ function torreHtml(env: Env): string {
   const colorClaro = haciaBlanco(color, 0.55);
   const colorOscuro = haciaNegro(color, 0.18);
   const tz = zonaHoraria(env);
+  const negocioJs = JSON.stringify(env.BUSINESS_NAME || "Mi Negocio").replace(/</g, "\\u003c");
 
   return `<!DOCTYPE html>
 <html lang="es">
@@ -389,6 +391,18 @@ function torreHtml(env: Env): string {
   .msg .t{display:block;font-family:'JetBrains Mono',monospace;font-size:9.5px;color:var(--muted);margin-top:6px;}
   .ev{display:flex;gap:10px;align-items:baseline;padding:7px 0;border-bottom:1px solid rgba(255,255,255,0.05);font-size:12.5px;color:var(--ink2);}
   .ev .t{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted);white-space:nowrap;}
+  .ev .x{display:block;font-size:11.5px;color:var(--muted);margin-top:2px;}
+  .ev.mal{color:#e6a99a;}
+  .fitem .v a{color:var(--gold);text-decoration:none;}
+  .fitem.ancho{grid-column:1 / -1;}
+  .aviso-tel{font-size:11.5px;color:#e8b86b;margin-top:4px;}
+  .wa-btn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:13px;border-radius:999px;background:#25D366;color:#06260f;font-weight:800;font-size:14.5px;text-decoration:none;margin:14px 0 4px;}
+  .wa-btn:hover{filter:brightness(1.06);}
+  .resp{width:100%;border-collapse:collapse;}
+  .resp td{padding:7px 0;border-bottom:1px solid rgba(255,255,255,0.05);font-size:13px;vertical-align:top;cursor:default;}
+  .resp td.k{color:var(--muted);padding-right:12px;width:42%;}
+  .resp td.v{color:var(--ink2);}
+  .mail-msg{font-size:12px;color:var(--muted);margin-top:8px;line-height:1.5;}
   /* ---------- modal agregar lead ---------- */
   .modal{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:min(420px,92%);background:#0f0f12;border:1px solid rgba(var(--gold-rgb),0.3);border-radius:18px;padding:26px 24px;z-index:45;box-shadow:0 40px 110px -20px rgba(0,0,0,0.9);}
   .modal h3{margin:0 0 4px;font-size:18px;font-weight:800;}
@@ -554,6 +568,7 @@ function torreHtml(env: Env): string {
   var KEY_LS = 'imperio_crm_key';
   var TZ = '${tz}';
   var BRAND = '${color}';
+  var NEGOCIO = ${negocioJs};
   var ESTADOS = ['nuevo','curioso','tibio','caliente','calificado','agendo','comprador','baja'];
   var NOMBRES = {nuevo:'Nuevo',curioso:'Curioso',tibio:'Tibio',caliente:'Caliente',calificado:'Calificado',agendo:'Agendó',comprador:'Comprador',baja:'Baja'};
   var CANALES = {instagram:'IG',whatsapp:'WA',web:'WEB',manual:'MANUAL'};
@@ -834,6 +849,22 @@ function torreHtml(env: Env): string {
   $('drawerBg').addEventListener('click', cerrarFicha);
   document.addEventListener('keydown', function(e){ if(e.key === 'Escape'){ cerrarFicha(); cerrarModal(); } });
 
+  function saludoWa(nombre){
+    var n = String(nombre || '').trim().split(' ')[0];
+    return 'Hola' + (n ? ' ' + n : '') + ', te escribo de ' + NEGOCIO + '.';
+  }
+  function eventoLegible(ev){
+    var p = {}; try { p = JSON.parse(ev.payload || '{}') || {}; } catch(e){}
+    var t = String(ev.type || '');
+    if(t.indexOf('estado: ') === 0) return { txt: 'Pasó a «' + (NOMBRES[t.slice(8)] || t.slice(8)) + '»' };
+    if(t === 'respuestas') return { txt: 'Llenó el formulario' };
+    if(t === 'cita') return { txt: 'Agendó una cita', x: p.inicio ? new Date(p.inicio).toLocaleString('es',{ timeZone:TZ, weekday:'long', day:'numeric', month:'long', hour:'numeric', minute:'2-digit', hour12:true }) + ' (tu hora)' : (p.texto || '') };
+    if(t === 'aviso_correo') return p.ok
+      ? { txt: 'Te avisé por correo (' + (p.tipo === 'agendo' ? 'agendó' : 'nuevo lead') + ')' }
+      : { txt: 'El aviso por correo NO salió', x: p.error || '', mal: true };
+    return { txt: t };
+  }
+
   function botonListo(btn){
     var antes = btn.textContent;
     btn.textContent = '✓ Listo';
@@ -848,14 +879,28 @@ function torreHtml(env: Env): string {
       html.push('<button class="close" type="button" aria-label="Cerrar">×</button>');
       html.push('<h3>' + esc(L.name || '(sin nombre)') + '</h3>');
       html.push('<div style="margin:6px 0 2px;"><span class="chip st-' + esc(L.status) + '">' + esc(NOMBRES[L.status] || L.status) + '</span> <span class="ch" style="margin-left:6px;">' + esc(CANALES[L.channel] || L.channel) + '</span></div>');
+      var X = d.extra || {};
+      var waLink = X.whatsapp ? 'https://wa.me/' + X.whatsapp.slice(1) + '?text=' + encodeURIComponent(saludoWa(L.name)) : '';
+      if(waLink) html.push('<a class="wa-btn" target="_blank" rel="noopener" href="' + esc(waLink) + '">Escribirle por WhatsApp</a>');
       html.push('<div class="fgrid">');
-      html.push('<div class="fitem"><div class="k">Correo</div><div class="v">' + esc(L.email || '—') + '</div></div>');
-      html.push('<div class="fitem"><div class="k">WhatsApp</div><div class="v">' + esc(L.phone || '—') + '</div></div>');
+      if(X.cita) html.push('<div class="fitem ancho"><div class="k">📅 Cita (tu hora)</div><div class="v">' + esc(X.cita) + '</div></div>');
+      html.push('<div class="fitem"><div class="k">Correo</div><div class="v">' + (L.email ? '<a href="mailto:' + esc(L.email) + '">' + esc(L.email) + '</a>' : '—') + '</div></div>');
+      html.push('<div class="fitem"><div class="k">WhatsApp</div><div class="v">' +
+        (waLink ? '<a target="_blank" rel="noopener" href="' + esc(waLink) + '">' + esc(X.whatsapp) + ' ↗</a>' : esc(L.phone || '—')) +
+        (L.phone && !X.whatsapp ? '<div class="aviso-tel">⚠️ Sin indicativo de país: confírmalo antes de escribirle.</div>' : '') +
+        '</div></div>');
       html.push('<div class="fitem"><div class="k">Origen</div><div class="v">' + esc(L.source || '—') + '</div></div>');
       html.push('<div class="fitem"><div class="k">Lead #</div><div class="v">' + L.id + '</div></div>');
       html.push('<div class="fitem"><div class="k">Llegó</div><div class="v">' + esc(fmtFecha(L.created_at)) + '</div></div>');
       html.push('<div class="fitem"><div class="k">Último visto</div><div class="v">' + esc(fmtFecha(L.last_seen)) + '</div></div>');
       html.push('</div>');
+
+      var R = X.respuestas;
+      if(R && Object.keys(R).length){
+        html.push('<div class="sec">Respuestas del formulario</div><table class="resp">');
+        Object.keys(R).forEach(function(k){ html.push('<tr><td class="k">' + esc(k) + '</td><td class="v">' + esc(R[k]) + '</td></tr>'); });
+        html.push('</table>');
+      }
 
       html.push('<div class="sec">Cambiar estado</div>');
       html.push('<div style="display:flex;gap:8px;align-items:center;">');
@@ -871,10 +916,17 @@ function torreHtml(env: Env): string {
       html.push('<textarea id="dNotas" class="dnotas" placeholder="Apunta aquí lo importante de este lead…">' + esc(L.notes || '') + '</textarea>');
       html.push('<button id="dGuardaNotas" class="btn ghost" type="button" style="margin-top:8px;">Guardar notas</button>');
 
+      html.push('<div class="sec">Aviso a tu correo</div>');
+      html.push('<button id="dAviso" class="btn ghost" type="button">📧 Enviarme este lead al correo</button>');
+      html.push('<div id="dAvisoMsg" class="mail-msg">' + (X.avisos ? 'Te llega con su WhatsApp, sus respuestas y el botón para escribirle.' : 'Los avisos por correo están apagados: falta configurar Brevo (mira el README).') + '</div>');
+
       var evs = d.events || [];
       if(evs.length){
         html.push('<div class="sec">Historia</div>');
-        evs.forEach(function(ev){ html.push('<div class="ev"><span class="t">' + esc(fmtFecha(ev.created_at)) + '</span><span>' + esc(ev.type) + '</span></div>'); });
+        evs.forEach(function(ev){
+          var e = eventoLegible(ev);
+          html.push('<div class="ev' + (e.mal ? ' mal' : '') + '"><span class="t">' + esc(fmtFecha(ev.created_at)) + '</span><span>' + esc(e.txt) + (e.x ? '<span class="x">' + esc(e.x) + '</span>' : '') + '</span></div>');
+        });
       }
       var msgs = d.messages || [];
       html.push('<div class="sec">Conversación (' + msgs.length + ')</div>');
@@ -899,6 +951,16 @@ function torreHtml(env: Env): string {
         api('/torre/api/lead/' + id + '/notas', { method: 'POST', body: { notes: notas } }).then(function(r){
           if(r.ok){ botonListo(dr.querySelector('#dGuardaNotas')); }
         }).catch(function(){});
+      });
+      dr.querySelector('#dAviso').addEventListener('click', function(){
+        var b = dr.querySelector('#dAviso'), msg = dr.querySelector('#dAvisoMsg');
+        b.disabled = true; b.textContent = 'Enviando…';
+        api('/torre/api/lead/' + id + '/aviso', { method: 'POST', body: {} }).then(function(r){
+          b.disabled = false; b.textContent = '📧 Enviarme este lead al correo';
+          msg.textContent = r.mensaje || (r.ok ? 'Listo.' : 'No se pudo enviar.');
+          msg.style.color = r.ok ? '' : '#e6a99a';
+          if(r.ok) setTimeout(function(){ abrirFicha(id); }, 600);
+        }).catch(function(){ b.disabled = false; b.textContent = '📧 Enviarme este lead al correo'; });
       });
       dr.hidden = false; $('drawerBg').hidden = false;
       dr.scrollTop = 0;

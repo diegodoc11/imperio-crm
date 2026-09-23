@@ -22,16 +22,36 @@
 
   // ---- Personaliza tu CRM aquí (sin tocar código) ----
   "vars": {
-    // El nombre de TU negocio (aparece en la Torre de Control).
+    // El nombre de TU negocio (aparece en la Torre de Control, en tus avisos
+    // y en el saludo de WhatsApp: "Hola Ana, te escribo de Mi Negocio").
     "BUSINESS_NAME": "Mi Negocio",
     // Color de la marca en formato hex. El dorado Imperio por defecto.
     "BRAND_COLOR": "#cdb68c",
-    // Tu zona horaria (para que "hoy" sea TU hoy).
+    // Tu zona horaria (para que "hoy" sea TU hoy y las citas salgan en TU hora).
     // Ejemplos: America/Bogota, America/Mexico_City, America/Argentina/Buenos_Aires,
     //           America/Lima, America/Santiago, Europe/Madrid
-    "TIMEZONE": "America/Bogota"
+    "TIMEZONE": "America/Bogota",
+    // Indicativo de tu país, sin el "+". La gente escribe su WhatsApp sin él
+    // (3001234567) y así no se le puede escribir: el CRM lo completa solo.
+    // 57 Colombia · 52 México · 593 Ecuador · 51 Perú · 56 Chile · 54 Argentina
+    // 58 Venezuela · 1 EE. UU. · 34 España · 507 Panamá · 506 Costa Rica
+    "PAIS_TELEFONO": "57",
+    // ¿Cuándo te aviso por correo? "nuevo,agendo" (cada lead nuevo y cada cita),
+    // "agendo" (solo cuando agendan) o "no" (nunca). Necesita Brevo: mira abajo.
+    "AVISOS": "nuevo,agendo",
+    // Remitente de tus avisos: un correo VERIFICADO en tu cuenta de Brevo.
+    // Vacío = usa tu mismo AVISO_EMAIL (el correo con que abriste Brevo ya está verificado).
+    "AVISO_REMITENTE": "",
+    // Opcional: id de tu lista de Brevo. Cada lead con correo entra ahí
+    // (para tu secuencia de bienvenida automática). Vacío = no se usa.
+    "BREVO_LISTA_ID": ""
   }
 
+  // ---- AVISOS A TU CORREO (opcional, gratis con Brevo: 300 correos al día) ----
+  // Son 2 secretos (no van aquí para que no queden en GitHub). Córrelos una vez:
+  //   npx wrangler secret put BREVO_API_KEY   -> tu clave de API de Brevo (app.brevo.com → SMTP y API → Claves API)
+  //   npx wrangler secret put AVISO_EMAIL     -> el correo donde quieres recibir los avisos
+  //
   // SECRETO OPCIONAL (avanzado): si prefieres fijar la clave de la Torre por consola
   // en vez de crearla en la primera visita, corre:
   //   printf '%s' 'TU-CLAVE' | npx wrangler secret put TORRE_KEY

@@ -35,7 +35,12 @@ CREATE TABLE IF NOT EXISTS messages (
   FOREIGN KEY (lead_id) REFERENCES leads(id)
 );
 
--- Eventos para seguimiento (pidió precio, asistió a clase, compró, ...)
+-- Eventos: la historia de cada lead (la ves en su ficha de la Torre). Los que usa el CRM:
+--   'estado: X'    -> pasó a la etapa X (desde el formulario o desde la Torre)
+--   'respuestas'   -> llenó el formulario; payload = { "pregunta": "respuesta" }
+--   'cita'         -> agendó; payload = { "inicio": "2026-09-28T20:00:00.000Z" } (o { "texto": ... })
+--   'aviso_correo' -> te avisó por correo; payload = { "tipo": "nuevo|agendo", "ok": true|false, "error"? }
+-- Puedes agregar los tuyos (pidió precio, asistió a clase, compró, ...).
 CREATE TABLE IF NOT EXISTS events (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   lead_id    INTEGER NOT NULL,

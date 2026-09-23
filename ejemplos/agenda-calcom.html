@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<!-- ============================================================
+  IMPERIO CRM · Agenda con cal.com conectada a tu CRM
+  Datos → calendario → cita. Cada paso queda en tu CRM.
+
+  CÓMO USARLO: cambia CRM_URL, CAL_LINK y PAIS en el <script>
+  de abajo y sube este archivo a tu hosting (o copia las partes
+  a tu landing).
+
+  LO QUE APRENDIMOS CON CITAS REALES (ya viene resuelto):
+  - cal.com NO pide el WhatsApp. Aquí lo pedimos ANTES del
+    calendario y va escrito en las notas de la cita: lo ves en el
+    correo de cal.com y en tu Google Calendar, con link directo.
+  - El lead queda guardado apenas deja sus datos, aunque no agende.
+    Así puedes escribirle a los que se quedaron a mitad de camino.
+  - La hora de la cita se manda EXACTA (no como la ve el lead en su
+    país). Tu CRM te la muestra en TU zona horaria: un lead de
+    Venezuela que agenda "4 pm" suyo te aparece a las 3 pm de Bogotá.
+  - Al agendar, te llega un correo "Agendó: Ana — lunes 3:00 p. m."
+    con su WhatsApp y un botón para escribirle (si activaste avisos).
+============================================================ -->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agenda tu llamada</title>
+<style>
+  body{margin:0;min-height:100vh;background:#09090a;color:#f4f2ee;font-family:system-ui,sans-serif;padding:20px;box-sizing:border-box;}
+  .card{width:100%;max-width:400px;margin:6vh auto 0;background:linear-gradient(180deg,#131316,#0d0d10);border:1px solid rgba(205,182,140,0.3);border-radius:20px;padding:32px 28px;box-sizing:border-box;}
+  h1{font-size:20px;margin:0 0 6px;}
+  p{color:#8f8d88;font-size:13.5px;margin:0 0 20px;line-height:1.55;}
+  input,select{width:100%;box-sizing:border-box;padding:13px 15px;border-radius:11px;border:1px solid rgba(255,255,255,0.14);background:rgba(255,255,255,0.05);color:#f4f2ee;font-size:14.5px;outline:none;margin-bottom:11px;font-family:inherit;}
+  select option{background:#131316;}
+  input:focus,select:focus{border-color:rgba(205,182,140,0.6);}
+  .tel{display:flex;gap:8px;}
+  .tel select{width:112px;flex:none;padding:13px 8px;}
+  button{width:100%;padding:14px;border:0;border-radius:999px;background:linear-gradient(180deg,#f6edd6,#cdb68c 60%,#b89b64);color:#0b0b0c;font-weight:700;font-size:15px;cursor:pointer;font-family:inherit;}
+  .err{color:#e6a99a;font-size:13px;min-height:17px;margin:2px 0 8px;}
+  .oculto{display:none !important;}
+  #paso2{max-width:1000px;margin:0 auto;}
+  #paso2 h1{text-align:center;margin:10px 0 4px;}
+  #paso2 p{text-align:center;}
+  #calendario{width:100%;min-height:620px;}
+  .listo{text-align:center;padding:30px 0 20px;}
+  .listo .check{font-size:44px;margin-bottom:10px;}
+</style>
+</head>
+<body>
+  <!-- PASO 1: sus datos (el WhatsApp con país) -->
+  <div id="paso1" class="card">
+    <h1>Agenda tu llamada 📅</h1>
+    <p>Déjame tus datos y escoge el día y la hora que mejor te quede.</p>
+    <form id="f">
+      <input id="fNombre" type="text" placeholder="Tu nombre" autocomplete="name" required>
+      <input id="fCorreo" type="email" placeholder="Tu mejor correo" autocomplete="email" required>
+      <div class="tel">
+        <select id="fPais" aria-label="País"></select>
+        <input id="fTel" type="tel" placeholder="Tu WhatsApp" autocomplete="tel-national" required>
+      </div>
+      <div id="fErr" class="err"></div>
+      <button type="submit">Ver horarios →</button>
+    </form>
+  </div>
+
+  <!-- PASO 2: el calendario de cal.com -->
+  <div id="paso2" class="oculto">
+    <h1>Escoge tu horario</h1>
+    <p>Los horarios salen en la hora de tu país.</p>
+    <div id="calendario"></div>
+  </div>
+
+  <!-- PASO 3: listo -->
+  <div id="paso3" class="card listo oculto">
+    <div class="check">✅</div>
+    <h1>¡Tu llamada quedó agendada!</h1>
+    <p>Te llegó la confirmación al correo. Te escribimos por WhatsApp antes de la cita.</p>
+  </div>
+
+<script>
+(function(){
+  // 👇 CAMBIA ESTO
+  var CRM_URL  = 'https://imperio-crm.TU-SUBDOMINIO.workers.dev'; // tu CRM (sin barra al final)
+  var CAL_LINK = 'tu-usuario/tu-evento';                          // de cal.com/tu-usuario/tu-evento
+  var PAIS     = '57';                                            // país marcado por defecto
+
+  var PAISES = [
+    ['57','🇨🇴 +57'],['52','🇲🇽 +52'],['593','🇪🇨 +593'],['51','🇵🇪 +51'],['56','🇨🇱 +56'],
+    ['54','🇦🇷 +54'],['58','🇻🇪 +58'],['591','🇧🇴 +591'],['595','🇵🇾 +595'],['598','🇺🇾 +598'],
+    ['506','🇨🇷 +506'],['507','🇵🇦 +507'],['502','🇬🇹 +502'],['503','🇸🇻 +503'],['504','🇭🇳 +504'],
+    ['505','🇳🇮 +505'],['1','🇺🇸 +1'],['34','🇪🇸 +34']
+  ];
+  var sel = document.getElementById('fPais');
+  PAISES.forEach(function(p){
+    var o = document.createElement('option');
+    o.value = p[0]; o.textContent = p[1]; if(p[0] === PAIS) o.selected = true;
+    sel.appendChild(o);
+  });
+  function whatsappCompleto(){
+    var tel = document.getElementById('fTel').value.trim();
+    if(!tel) return '';
+    if(tel.charAt(0) === '+') return tel;
+    var d = tel.replace(/\D/g, '').replace(/^0+/, '');
+    if(sel.value === '54' && d.charAt(0) !== '9') d = '9' + d;
+    return '+' + sel.value + ' ' + d;
+  }
+
+  // Atribución de primer toque (de qué anuncio vino)
+  var UTM_LS = 'crm_utm_primer_toque';
+  function origen(){
+    try{
+      var g = localStorage.getItem(UTM_LS); if(g) return g;
+      var ps = new URLSearchParams(location.search);
+      var partes = [ps.get('utm_source'), ps.get('utm_campaign'), ps.get('utm_content')].filter(function(x){ return x && x.trim(); });
+      var o = partes.length ? 'web:' + partes.join(' · ') : 'web:directo';
+      localStorage.setItem(UTM_LS, o); return o;
+    }catch(e){ return 'web:directo'; }
+  }
+  origen();
+
+  var lead = { nombre: '', correo: '', whatsapp: '' };
+
+  // keepalive: el envío sobrevive aunque la página cambie o se cierre enseguida
+  function alCRM(extra){
+    var body = { channel: 'web', name: lead.nombre, email: lead.correo, phone: lead.whatsapp, source: origen() };
+    for(var k in extra) body[k] = extra[k];
+    return fetch(CRM_URL + '/lead', { method: 'POST', keepalive: true, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  }
+
+  // PASO 1 → guarda el lead YA (aunque no agende) y muestra el calendario
+  document.getElementById('f').addEventListener('submit', function(ev){
+    ev.preventDefault();
+    lead.nombre = document.getElementById('fNombre').value.trim();
+    lead.correo = document.getElementById('fCorreo').value.trim().toLowerCase();
+    lead.whatsapp = whatsappCompleto();
+    if(!lead.nombre || !lead.correo || lead.whatsapp.replace(/\D/g, '').length < 8){
+      document.getElementById('fErr').textContent = 'Completa tu nombre, correo y WhatsApp.';
+      return;
+    }
+    alCRM({}).catch(function(){});
+    document.getElementById('paso1').classList.add('oculto');
+    document.getElementById('paso2').classList.remove('oculto');
+    mostrarCalendario();
+  });
+
+  // PASO 2 → cal.com incrustado, con sus datos ya escritos
+  function mostrarCalendario(){
+    (function (C, A, L) { var p = function (a, ar) { a.q.push(ar); }; var d = C.document; C.Cal = C.Cal || function () { var cal = C.Cal; var ar = arguments; if (!cal.loaded) { cal.ns = {}; cal.q = cal.q || []; d.head.appendChild(d.createElement("script")).src = A; cal.loaded = true; } if (ar[0] === L) { var api = function () { p(api, arguments); }; var namespace = ar[1]; api.q = api.q || []; if (typeof namespace === "string") { cal.ns[namespace] = cal.ns[namespace] || api; p(cal.ns[namespace], ar); p(cal, ["initNamespace", namespace]); } else p(cal, ar); return; } p(cal, ar); }; })(window, "https://app.cal.com/embed/embed.js", "init");
+
+    // El WhatsApp va en la PRIMERA línea de las notas: cal.com no lo pide,
+    // y así sale en su correo de confirmación y en tu calendario.
+    var dig = lead.whatsapp.replace(/\D/g, '');
+    var notas = 'WhatsApp: ' + lead.whatsapp + ' → https://wa.me/' + dig;
+
+    Cal('init', 'agenda', { origin: 'https://app.cal.com' });
+    Cal.ns.agenda('inline', {
+      elementOrSelector: '#calendario',
+      calLink: CAL_LINK,
+      config: { layout: 'month_view', theme: 'dark', name: lead.nombre, email: lead.correo, notes: notas }
+    });
+    Cal.ns.agenda('ui', { theme: 'dark', layout: 'month_view' });
+    // cal.com avisa cuando la cita queda creada (V2 trae startTime; la versión vieja, date).
+    Cal.ns.agenda('on', { action: 'bookingSuccessfulV2', callback: function(e){ alAgendar(e.detail && e.detail.data && e.detail.data.startTime); } });
+    Cal.ns.agenda('on', { action: 'bookingSuccessful', callback: function(e){ alAgendar(e.detail && e.detail.data && e.detail.data.date); } });
+  }
+
+  // PASO 3 → el lead pasa a "Agendó" con la hora EXACTA de la cita
+  var agendado = false;
+  function alAgendar(fecha){
+    if(agendado) return; // cal.com puede avisar dos veces
+    agendado = true;
+    var inicio = '';
+    try { inicio = new Date(fecha).toISOString(); } catch(err){}
+    alCRM({ status: 'agendo', cita: inicio || null }).catch(function(){});
+    document.getElementById('paso2').classList.add('oculto');
+    document.getElementById('paso3').classList.remove('oculto');
+    // Si tienes Pixel de Meta, aquí va la conversión: fbq('track', 'Schedule');
+  }
+  window.__alAgendar = alAgendar; // solo para probar sin reservar de verdad
+})();
+</script>
+</body>
+</html>

@@ -4,14 +4,20 @@
   Un formulario listo para capturar leads y mandarlos a TU CRM.
 
   CÓMO USARLO (2 opciones):
-  1) Tal cual: cambia CRM_URL aquí abajo por la dirección de tu
-     Worker y sube este archivo a cualquier hosting.
+  1) Tal cual: cambia CRM_URL y PAIS aquí abajo (en el <script>)
+     y sube este archivo a cualquier hosting.
   2) Dentro de tu landing: copia el <form> y el <script> a tu
      página y ajusta los estilos a tu marca.
 
-  BONUS: guarda de dónde vino cada lead (utm_source, utm_campaign,
-  utm_content) con atribución de PRIMER toque — así sabrás qué
-  anuncio trajo a cada persona, igual que un CRM de pago.
+  LO QUE APRENDIMOS CON LEADS REALES (ya viene resuelto):
+  - La gente escribe su WhatsApp SIN indicativo aunque se lo pidas.
+    Por eso el país va en un selector aparte: el número llega
+    completo (+57 300...) y le puedes escribir con un clic.
+  - Las preguntas del formulario viajan en "answers": las ves en la
+    ficha del lead y en el aviso que te llega al correo.
+  - Guarda de dónde vino cada lead (utm_source, utm_campaign,
+    utm_content) con atribución de PRIMER toque: sabrás qué anuncio
+    trajo a cada persona, igual que un CRM de pago.
 ============================================================ -->
 <html lang="es">
 <head>
@@ -20,11 +26,15 @@
 <title>Déjame tus datos</title>
 <style>
   body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#09090a;color:#f4f2ee;font-family:system-ui,sans-serif;padding:20px;box-sizing:border-box;}
-  .card{width:100%;max-width:400px;background:linear-gradient(180deg,#131316,#0d0d10);border:1px solid rgba(205,182,140,0.3);border-radius:20px;padding:32px 28px;}
+  .card{width:100%;max-width:400px;background:linear-gradient(180deg,#131316,#0d0d10);border:1px solid rgba(205,182,140,0.3);border-radius:20px;padding:32px 28px;box-sizing:border-box;}
   h1{font-size:20px;margin:0 0 6px;}
   p{color:#8f8d88;font-size:13.5px;margin:0 0 20px;line-height:1.55;}
-  input{width:100%;box-sizing:border-box;padding:13px 15px;border-radius:11px;border:1px solid rgba(255,255,255,0.14);background:rgba(255,255,255,0.05);color:#f4f2ee;font-size:14.5px;outline:none;margin-bottom:11px;font-family:inherit;}
-  input:focus{border-color:rgba(205,182,140,0.6);}
+  input,select,textarea{width:100%;box-sizing:border-box;padding:13px 15px;border-radius:11px;border:1px solid rgba(255,255,255,0.14);background:rgba(255,255,255,0.05);color:#f4f2ee;font-size:14.5px;outline:none;margin-bottom:11px;font-family:inherit;}
+  select option{background:#131316;}
+  textarea{min-height:74px;resize:vertical;}
+  input:focus,select:focus,textarea:focus{border-color:rgba(205,182,140,0.6);}
+  .tel{display:flex;gap:8px;}
+  .tel select{width:112px;flex:none;padding:13px 8px;}
   button{width:100%;padding:14px;border:0;border-radius:999px;background:linear-gradient(180deg,#f6edd6,#cdb68c 60%,#b89b64);color:#0b0b0c;font-weight:700;font-size:15px;cursor:pointer;font-family:inherit;}
   .err{color:#e6a99a;font-size:13px;min-height:17px;margin:2px 0 8px;}
   .oculto{display:none;}
@@ -40,7 +50,11 @@
       <form id="f">
         <input id="fNombre" type="text" placeholder="Tu nombre" autocomplete="name">
         <input id="fCorreo" type="email" placeholder="Tu mejor correo" autocomplete="email">
-        <input id="fTel" type="tel" placeholder="Tu WhatsApp (con código de país)" autocomplete="tel">
+        <div class="tel">
+          <select id="fPais" aria-label="País"></select>
+          <input id="fTel" type="tel" placeholder="Tu WhatsApp" autocomplete="tel-national">
+        </div>
+        <textarea id="fAyuda" placeholder="¿En qué te podemos ayudar? (opcional)"></textarea>
         <div id="fErr" class="err"></div>
         <button type="submit">Quiero acceso →</button>
       </form>
@@ -56,6 +70,30 @@
 (function(){
   // 👇 CAMBIA ESTO por la dirección de TU CRM (sin barra al final)
   var CRM_URL = 'https://imperio-crm.TU-SUBDOMINIO.workers.dev';
+  // 👇 El país que sale marcado por defecto (el de la mayoría de tus clientes)
+  var PAIS = '57';
+
+  // --- Selector de país: el WhatsApp llega SIEMPRE con indicativo ---
+  var PAISES = [
+    ['57','🇨🇴 +57'],['52','🇲🇽 +52'],['593','🇪🇨 +593'],['51','🇵🇪 +51'],['56','🇨🇱 +56'],
+    ['54','🇦🇷 +54'],['58','🇻🇪 +58'],['591','🇧🇴 +591'],['595','🇵🇾 +595'],['598','🇺🇾 +598'],
+    ['506','🇨🇷 +506'],['507','🇵🇦 +507'],['502','🇬🇹 +502'],['503','🇸🇻 +503'],['504','🇭🇳 +504'],
+    ['505','🇳🇮 +505'],['1','🇺🇸 +1'],['34','🇪🇸 +34']
+  ];
+  var sel = document.getElementById('fPais');
+  PAISES.forEach(function(p){
+    var o = document.createElement('option');
+    o.value = p[0]; o.textContent = p[1]; if(p[0] === PAIS) o.selected = true;
+    sel.appendChild(o);
+  });
+  function whatsappCompleto(){
+    var tel = document.getElementById('fTel').value.trim();
+    if(!tel) return null;
+    if(tel.charAt(0) === '+') return tel;                       // ya lo escribió con indicativo
+    var d = tel.replace(/\D/g, '').replace(/^0+/, '');          // sin el 0 de adelante (Ecuador, Venezuela...)
+    if(sel.value === '54' && d.charAt(0) !== '9') d = '9' + d;  // Argentina: WhatsApp exige el 9
+    return '+' + sel.value + ' ' + d;
+  }
 
   // --- Atribución de primer toque: guardamos las UTM de la PRIMERA visita ---
   var UTM_LS = 'crm_utm_primer_toque';
@@ -77,10 +115,15 @@
     ev.preventDefault();
     var nombre = document.getElementById('fNombre').value.trim();
     var correo = document.getElementById('fCorreo').value.trim();
-    var tel = document.getElementById('fTel').value.trim();
+    var tel = whatsappCompleto();
+    var ayuda = document.getElementById('fAyuda').value.trim();
     var err = document.getElementById('fErr');
     if(!correo && !tel){ err.textContent = 'Pon al menos tu correo o tu WhatsApp.'; return; }
     err.textContent = '';
+
+    // Tus preguntas van aquí: { "la pregunta": "lo que respondió" }
+    var respuestas = {};
+    if(ayuda) respuestas['en qué le ayudamos'] = ayuda;
 
     fetch(CRM_URL + '/lead', {
       method: 'POST',
@@ -89,8 +132,9 @@
         channel: 'web',
         name: nombre || null,
         email: correo || null,
-        phone: tel || null,
-        source: utmPrimerToque()
+        phone: tel,
+        source: utmPrimerToque(),
+        answers: respuestas
       })
     }).then(function(r){ return r.json(); }).then(function(d){
       if(d.ok){
